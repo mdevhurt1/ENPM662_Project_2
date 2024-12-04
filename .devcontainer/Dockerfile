@@ -83,7 +83,10 @@ RUN apt-get update && apt-get install -y \
   && rm -rf /var/lib/apt/lists/* \
   && rosdep init || echo "rosdep already initialized" \
   && pip install pynput \
-  && pip install pandas
+  && pip install pandas \
+  && pip install sympy \
+  && pip install numpy \
+  && pip install matplotlib
 
 ARG USERNAME=ros
 ARG USER_UID=1000

@@ -23,7 +23,6 @@ find_package(sensor_msgs REQUIRED)
 install(DIRECTORY
   urdf
   meshes
-  rviz
   launch
   worlds
   config
@@ -45,6 +44,7 @@ find_package(ros2_control REQUIRED)
 
 install(PROGRAMS
   src/test.py
+  src/boxing.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
