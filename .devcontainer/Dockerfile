@@ -86,7 +86,8 @@ RUN apt-get update && apt-get install -y \
   && pip install pandas \
   && pip install sympy \
   && pip install numpy \
-  && pip install matplotlib
+  && pip install matplotlib \
+  && pip install roboticstoolbox-python
 
 ARG USERNAME=ros
 ARG USER_UID=1000
