@@ -27,3 +27,20 @@ velocity_controller:
         state_interfaces:
             - position
             - velocity
+
+position_controller:
+    ros__parameters:
+        joints:
+            - ShoulderRollJoint
+            - ShoulderPitchJoint
+            - ArmRollJoint
+            - ElbowJoint
+            - WristRollJoint
+            - WristPitchJoint
+            - WristYawJoint
+        interface_name: position
+        command_interfaces:
+            - position
+        state_interfaces:
+            - position
+            - velocity

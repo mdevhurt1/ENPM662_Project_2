@@ -21,7 +21,8 @@ class BoxingNode(Node):
 
         # Publish to the position and velocity controller topics
         self.joint_velocities_pub = self.create_publisher(Float64MultiArray, '/velocity_controller/commands', 10)
-
+        self.joint_position_pub = self.create_publisher(Float64MultiArray, '/position_controller/commands', 10)
+        
         self.settings = termios.tcgetattr(sys.stdin)
         
         # path parameters
@@ -35,6 +36,14 @@ class BoxingNode(Node):
         self.xi = 300
         self.yi = 0
         self.zi = 1500
+
+        self.theta_dot1_value_list = []
+        self.theta_dot2_value_list = []
+        self.theta_dot3_value_list = []
+        self.theta_dot4_value_list = []
+        self.theta_dot5_value_list = []
+        self.theta_dot6_value_list = []
+        self.theta_dot7_value_list = []
 
     # Get the key press from the terminal
     def getKey(self):
@@ -292,13 +301,6 @@ class BoxingNode(Node):
         theta5_value_list = [0.0]
         theta6_value_list = [0.0]
         theta7_value_list = [0.0]
-        self.theta_dot1_value_list = []
-        self.theta_dot2_value_list = []
-        self.theta_dot3_value_list = []
-        self.theta_dot4_value_list = []
-        self.theta_dot5_value_list = []
-        self.theta_dot6_value_list = []
-        self.theta_dot7_value_list = []
 
         # Calculate cartesian path parameters
         time, x_dot, y_dot, z_dot = self.cartesian_path()
@@ -501,6 +503,19 @@ class BoxingNode(Node):
                                          self.theta_dot7_value_list[i]]
                 i += 1
                 self.joint_velocities_pub.publish(joint_velocities)
+
+    def home(self):
+        joint_positions = Float64MultiArray()
+        joint_positions.data = [0.0,
+                                 0.0,
+                                 0.0,
+                                 0.0,
+                                 0.0,
+                                 0.0,
+                                 0.0]
+
+        self.joint_position_pub.publish(joint_positions)
+
      
     def run_control(self):
         joint_velocities = Float64MultiArray()
@@ -534,6 +549,10 @@ class BoxingNode(Node):
                     self.get_logger().info('Executing Trajectory...')
                     self.send_joint_velocities()
                     self.get_logger().info('Trajectory Executed!')
+                elif key == 'h':  # Execute
+                    self.get_logger().info('Sending to home...')
+                    self.home()
+                    self.get_logger().info('Homed!')
 
             joint_velocities.data = [0.0, 
                                      0.0,
