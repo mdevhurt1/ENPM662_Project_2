@@ -27,14 +27,51 @@ class BoxingNode(Node):
         # path parameters
         self.update_rate = 10
         self.dt = 1/self.update_rate
-        self.maximum_joint_velocity = (180 / 180) * pi # limit the joint velocity
-        self.scale = 0.1 # amount to scale joint velocities by if they exceed maximum
-        self.offset = (1 / 180) * pi # amount of offset to escape singularity
 
         # (x, y, z) of strike
-        self.xi = 300
+        self.xi = 420
         self.yi = 0
-        self.zi = 1500
+        self.zi = 500
+
+        self.numberOfPunches = 1
+        self.radius = 200
+
+        self.theta_dot1_value_list = []
+        self.theta_dot2_value_list = []
+        self.theta_dot3_value_list = []
+        self.theta_dot4_value_list = []
+        self.theta_dot5_value_list = []
+        self.theta_dot6_value_list = []
+        self.theta_dot7_value_list = []
+
+        self.theta1_value_list = [0]
+        self.theta2_value_list = [0.0]
+        self.theta3_value_list = [0]
+        self.theta4_value_list = [-pi/2]
+        self.theta5_value_list = [0.0]
+        self.theta6_value_list = [pi/2]
+        self.theta7_value_list = [0.0]
+
+        # DH table for the UR3e documented in the homework
+        self.theta1, self.theta2, self.theta3, self.theta4, self.theta5, self.theta6, self.theta7 = sym.symbols('theta1:8')
+        #                      theta,         d,          a,      alpha
+        self.DH = sym.Matrix([[self.theta1,   0.1651,     0,      pi/2    ],
+                              [self.theta2,   0,          0,      -pi/2   ],
+                              [self.theta3,   0.25503,    0,      pi/2    ],
+                              [self.theta4,   0,          0,      -pi/2   ],
+                              [self.theta5,   0.42746,    0,      pi/2    ],
+                              [self.theta6,   0,          0,      -pi/2   ],
+                              [self.theta7,   0,          -0.085, 0       ]])
+
+        # Create successive transormation matrices for each row of the DH table
+        self.An = []
+        for i in range(7):
+            self.An.append(self.dh_transform(self.DH[i,0], self.DH[i,1]*1000, self.DH[i,2]*1000, self.DH[i,3]))
+
+        # Calculate cumulative transformations
+        self.Tn = [self.An[0]]
+        for i in range(6):
+            self.Tn.append(self.Tn[i] @ self.An[i+1])
 
     # Get the key press from the terminal
     def getKey(self):
@@ -66,7 +103,7 @@ class BoxingNode(Node):
         y_dot = []
         z_dot = []
 
-        T1 = 5  # time for approach
+        T1 = 2  # time for approach
         T2 = 5  # time for circle
 
         # approach section
@@ -75,15 +112,17 @@ class BoxingNode(Node):
         # Calculate the starting point (Home position)
         T_start = self.Tn[5].subs(
             {
-                theta1: 0.0,
-                theta2: 0.0,
-                theta3: -pi/2,
-                theta4: -pi/2,
-                theta5: 0.0,
-                theta6: 0.0,
-                theta7: 0.0,
+                theta1: self.theta1_value_list[0],
+                theta2: self.theta2_value_list[0],
+                theta3: self.theta3_value_list[0],
+                theta4: self.theta4_value_list[0],
+                theta5: self.theta5_value_list[0],
+                theta6: self.theta6_value_list[0],
+                theta7: self.theta7_value_list[0],
             }
         )
+
+        sym.pprint(T_start[:3, 3])
 
         # Calculate cartesian positions
         dx = (self.xi - T_start[0,3]) / T1
@@ -109,9 +148,9 @@ class BoxingNode(Node):
         t2 = np.linspace(0, T2, T2 * self.update_rate)
 
         # Calculate cartesian positions
-        x2 = 50 - (50 * sym.cos((2 * pi / T2) * t))
+        x2 = -(self.radius * sym.sin((2 * pi / (T2/self.numberOfPunches)) * t))
         y2 = (0 * t)
-        z2 = (50 * sym.sin((2 * pi / T2) * t))
+        z2 = (self.radius * sym.cos((2 * pi / (T2/self.numberOfPunches)) * t))
 
         # Calculate cartesian velocities
         x2_dot = x2.diff(t)
@@ -130,140 +169,113 @@ class BoxingNode(Node):
     def calculate_robot_toolbox(self):
         # Define the robot using DH parameters
         robot = DHRobot([
-            RevoluteDH(a=0, alpha=np.pi/2, d=0.1651),
+            RevoluteDH(a=0, alpha=np.pi/2, d=165.1),
             RevoluteDH(a=0, alpha=-np.pi/2, d=0),
-            RevoluteDH(a=0, alpha=np.pi/2, d=0.25503),
+            RevoluteDH(a=0, alpha=np.pi/2, d=255.03),
             RevoluteDH(a=0, alpha=-np.pi/2, d=0),
-            RevoluteDH(a=0, alpha=np.pi/2, d=0.42746),
+            RevoluteDH(a=0, alpha=np.pi/2, d=427.46),
             RevoluteDH(a=0, alpha=-np.pi/2, d=0),
-            RevoluteDH(a=-0.085, alpha=0, d=0),
+            RevoluteDH(a=-85, alpha=0, d=0),
         ], name="7-DOF_Robot")
 
-        q = [0,pi/2,0,0,0,0,0]
+        # q = [0,0,0,0,0,0,0]
 
-        # Visualize the robot
-        robot.plot(q, block=True)
+        # # Visualize the robot
+        # robot.plot(q, block=True)
 
-        time = np.linspace(0,5,5*self.update_rate)
-        delta_T = self.dt
-        theta1_v = pi/4
-        theta2_v = pi/4
-        theta3_v = pi/4 
-        theta4_v = pi/4 
-        theta5_v = pi/4
-        theta6_v = pi/4
-        theta7_v = pi/4
-        thetas = np.array([theta1_v, theta2_v, theta3_v, theta4_v, theta5_v, theta6_v, theta7_v])
+        # Calculate cartesian path parameters
+        time, x_dot, y_dot, z_dot = self.cartesian_path()
 
-        Px_v_array = np.zeros(51)
-        Py_v_array = np.zeros(51)
-        Pz_v_array = np.zeros(51)
-
-        theta1_v_array = np.zeros(51)
-        theta2_v_array = np.zeros(51)
-        theta3_v_array = np.zeros(51)
-        theta4_v_array = np.zeros(51)
-        theta5_v_array = np.zeros(51)
-        theta6_v_array = np.zeros(51)
-        theta7_v_array = np.zeros(51)
-
-        theta1_dot_v_array = np.zeros(51)
-        theta2_dot_v_array = np.zeros(51)
-        theta3_dot_v_array = np.zeros(51)
-        theta4_dot_v_array = np.zeros(51)
-        theta5_dot_v_array = np.zeros(51)
-        theta6_dot_v_array = np.zeros(51)
-        theta7_dot_v_array = np.zeros(51)
+        # Initialize positions, joint angles and velocities lists
+        x_value_list = []
+        y_value_list = []
+        z_value_list = []
 
         print("Calculating...")
         # Repeat a for loop for every increment in time. Calculate joint positions and velocities at each increment in time.
         for i in range(np.size(time)):
             t = time[i]
+            thetas = np.array([self.theta1_value_list[i],
+                               self.theta2_value_list[i],
+                               self.theta3_value_list[i],
+                               self.theta4_value_list[i],
+                               self.theta5_value_list[i],
+                               self.theta6_value_list[i],
+                               self.theta7_value_list[i],])
 
-            # Circle velocity profile
-            Px_prime = 0.0
-            Py_prime = 0.01
-            Pz_prime = 0.0
-            
+
             # Compute the Jacobian
-            Jacobian_v = robot.jacob0(thetas)
+            J = robot.jacob0(thetas)
+
+            effector = np.array([[x_dot[i]],[y_dot[i]],[z_dot[i]], [0], [0], [0]])
+
+            # Convert J and effector to numeric arrays
+            J_numeric = np.array(J, dtype=np.float64)
+            effector_numeric = np.array(effector, dtype=np.float64)
+
+            # Perform the pseudo-inverse operation
+            theta_dots = np.linalg.pinv(J_numeric).dot(effector_numeric)
             
-            effector = np.array([[Px_prime],[Py_prime],[Pz_prime], [0], [0], [0]])
-            theta_dots = np.linalg.pinv(Jacobian_v).dot(effector)
+            self.theta1_value_list.append(self.theta1_value_list[i] + theta_dots[0]*self.dt)
+            self.theta2_value_list.append(self.theta2_value_list[i] + theta_dots[1]*self.dt)
+            self.theta3_value_list.append(self.theta3_value_list[i] + theta_dots[2]*self.dt)
+            self.theta4_value_list.append(self.theta4_value_list[i] + theta_dots[3]*self.dt)
+            self.theta5_value_list.append(self.theta5_value_list[i] + theta_dots[4]*self.dt)
+            self.theta6_value_list.append(self.theta6_value_list[i] + theta_dots[5]*self.dt)
+            self.theta7_value_list.append(self.theta7_value_list[i] + theta_dots[6]*self.dt)
             
-            theta1_v = theta1_v + theta_dots[0]*delta_T
-            theta2_v = theta2_v + theta_dots[1]*delta_T
-            theta3_v = theta3_v + theta_dots[2]*delta_T
-            theta4_v = theta4_v + theta_dots[3]*delta_T
-            theta5_v = theta5_v + theta_dots[4]*delta_T
-            theta6_v = theta6_v + theta_dots[5]*delta_T
-            theta7_v = theta7_v + theta_dots[6]*delta_T
             
-            theta1_v = float(theta1_v[0])
-            theta2_v = float(theta2_v[0])
-            theta3_v = float(theta3_v[0])
-            theta4_v = float(theta4_v[0])
-            theta5_v = float(theta5_v[0])
-            theta6_v = float(theta6_v[0])
-            theta7_v = float(theta7_v[0])
-            thetas = np.array([theta1_v, theta2_v, theta3_v, theta4_v, theta5_v, theta6_v, theta7_v])
-            
+            thetas1 = np.array([float(self.theta1_value_list[i+1]),
+                                float(self.theta2_value_list[i+1]),
+                                float(self.theta3_value_list[i+1]),
+                                float(self.theta4_value_list[i+1]),
+                                float(self.theta5_value_list[i+1]),
+                                float(self.theta6_value_list[i+1]),
+                                float(self.theta7_value_list[i+1]),])
+
             # Compute forward kinematics for the updated joint angles
-            T = robot.fkine(thetas)
+            T = robot.fkine(thetas1)
             translation = T.t
-            Px_v = translation[0]
-            Py_v = translation[1]
-            Pz_v = translation[2]
+            x_value_list.append(translation[0])
+            y_value_list.append(translation[1])
+            z_value_list.append(translation[2])
             
-            Px_v_array[i] = Px_v
-            Py_v_array[i] = Py_v
-            Pz_v_array[i] = Pz_v
-            theta1_v_array[i] = theta1_v
-            theta2_v_array[i] = theta2_v
-            theta3_v_array[i] = theta3_v
-            theta4_v_array[i] = theta4_v
-            theta5_v_array[i] = theta5_v
-            theta6_v_array[i] = theta6_v
-            theta7_v_array[i] = theta7_v
             
-            theta1_dot_v_array[i] = theta_dots[0]
-            theta2_dot_v_array[i] = theta_dots[1]
-            theta3_dot_v_array[i] = theta_dots[2]
-            theta4_dot_v_array[i] = theta_dots[3]
-            theta5_dot_v_array[i] = theta_dots[4]
-            theta6_dot_v_array[i] = theta_dots[5]
-            theta7_dot_v_array[i] = theta_dots[6]
             
-        self.theta_dot1_value_list = theta1_dot_v_array
-        self.theta_dot2_value_list = theta2_dot_v_array
-        self.theta_dot3_value_list = theta3_dot_v_array
-        self.theta_dot4_value_list = theta4_dot_v_array
-        self.theta_dot5_value_list = theta5_dot_v_array
-        self.theta_dot6_value_list = theta6_dot_v_array
-        self.theta_dot7_value_list = theta7_dot_v_array
+            self.theta_dot1_value_list.append(theta_dots[0])
+            self.theta_dot2_value_list.append(theta_dots[1])
+            self.theta_dot3_value_list.append(theta_dots[2])
+            self.theta_dot4_value_list.append(theta_dots[3])
+            self.theta_dot5_value_list.append(theta_dots[4])
+            self.theta_dot6_value_list.append(theta_dots[5])
+            self.theta_dot7_value_list.append(theta_dots[6])
+        
+        # Plot joint velocities
+        plt.figure("Joint Velocities")
+        plt.plot(time, self.theta_dot1_value_list, label="theta_dot1")
+        plt.plot(time, self.theta_dot2_value_list, label="theta_dot2")
+        plt.plot(time, self.theta_dot3_value_list, label="theta_dot3")
+        plt.plot(time, self.theta_dot4_value_list, label="theta_dot4")
+        plt.plot(time, self.theta_dot5_value_list, label="theta_dot5")
+        plt.plot(time, self.theta_dot6_value_list, label="theta_dot6")
+        plt.plot(time, self.theta_dot7_value_list, label="theta_dot7")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Joint Velocities (rad/s)")
+        plt.title("Joint Velocities over Time")
+        plt.legend()
+
+        # Display the end effector path in xyz
+        fig1 = plt.figure("End Effector Positions")
+        ax1 = fig1.add_subplot(111, projection="3d")
+        ax1.plot3D(x_value_list, y_value_list, z_value_list, color="blue", label="Actual IK solutions")
+        ax1.set_xlabel("X (mm)")
+        ax1.set_ylabel("Y (mm)")
+        ax1.set_zlabel("Z (mm)")
+        ax1.legend()
+
+        plt.show()
 
     def calculate_trajectory(self):
-        # DH table for the UR3e documented in the homework
-        self.theta1, self.theta2, self.theta3, self.theta4, self.theta5, self.theta6, self.theta7 = sym.symbols('theta1:8')
-        #                      theta,         d,          a,      alpha
-        self.DH = sym.Matrix([[self.theta1,   0.1651,     0,      pi/2    ],
-                              [self.theta2,   0,          0,      -pi/2   ],
-                              [self.theta3,   0.25503,    0,      pi/2    ],
-                              [self.theta4,   0,          0,      -pi/2   ],
-                              [self.theta5,   0.42746,    0,      pi/2    ],
-                              [self.theta6,   0,          0,      -pi/2   ],
-                              [self.theta7,   0,          -0.085, 0       ]])
-
-        # Create successive transormation matrices for each row of the DH table
-        self.An = []
-        for i in range(7):
-            self.An.append(self.dh_transform(self.DH[i,0], self.DH[i,1]*1000, self.DH[i,2]*1000, self.DH[i,3]))
-
-        # Calculate cumulative transformations
-        self.Tn = [self.An[0]]
-        for i in range(6):
-            self.Tn.append(self.Tn[i] @ self.An[i+1])
-
         # Calculate the Jacobian via the 1st method discussed in lecture
         # Calculate Z and O components
         Z = [sym.Matrix([0, 0, 1])]
@@ -285,20 +297,6 @@ class BoxingNode(Node):
         x_value_list = []
         y_value_list = []
         z_value_list = []
-        theta1_value_list = [0.0]
-        theta2_value_list = [0.0]
-        theta3_value_list = [-pi/2]
-        theta4_value_list = [-pi/2]
-        theta5_value_list = [0.0]
-        theta6_value_list = [0.0]
-        theta7_value_list = [0.0]
-        self.theta_dot1_value_list = []
-        self.theta_dot2_value_list = []
-        self.theta_dot3_value_list = []
-        self.theta_dot4_value_list = []
-        self.theta_dot5_value_list = []
-        self.theta_dot6_value_list = []
-        self.theta_dot7_value_list = []
 
         # Calculate cartesian path parameters
         time, x_dot, y_dot, z_dot = self.cartesian_path()
@@ -325,71 +323,30 @@ class BoxingNode(Node):
             if i % self.update_rate == 0:
                 print(i, " out of ", len(time), " timestamps calculated")
 
-            # Escape the home position singularity
             # Calculate numerical Jacobian
             J_Numerical = self.J.subs(
                 {
-                    self.theta1: theta1_value_list[0],
-                    self.theta2: theta2_value_list[0],
-                    self.theta3: theta3_value_list[0],
-                    self.theta4: theta4_value_list[0],
-                    self.theta5: theta5_value_list[0],
-                    self.theta6: theta6_value_list[0],
-                    self.theta7: theta7_value_list[0],
+                    self.theta1: self.theta1_value_list[0],
+                    self.theta2: self.theta2_value_list[0],
+                    self.theta3: self.theta3_value_list[0],
+                    self.theta4: self.theta4_value_list[0],
+                    self.theta5: self.theta5_value_list[0],
+                    self.theta6: self.theta6_value_list[0],
+                    self.theta7: self.theta7_value_list[0],
                 }
             )
-
-            # Check if the determinant is close to 0, if so we need to offset to escape singularity
-            det = max(J_Numerical) / min(J_Numerical)
-            k = 0
-            while abs(det) <= 0.05:
-                print('Escaping singularity using joint ', k)
-                # try moving each joint by a small offset until we escape the singularity
-                if k == 0:
-                    theta1_value_list[0] += offset
-                elif k == 1:
-                    theta2_value_list[0] += offset
-                elif k == 2:
-                    theta3_value_list[0] += offset
-                elif k == 3:
-                    theta4_value_list[0] += offset
-                elif k == 4:
-                    theta5_value_list[0] += offset
-                elif k == 5:
-                    theta6_value_list[0] += offset
-                elif k == 6:
-                    theta7_value_list[0] += offset
-                elif k == 7:
-                    k = -1 # if we are still in a singularity after moving each joint, restart
-                k += 1
-
-                # Calculate numerical Jacobian
-                J_Numerical = self.J.subs(
-                    {
-                        self.theta1: theta1_value_list[0],
-                        self.theta2: theta2_value_list[0],
-                        self.theta3: theta3_value_list[0],
-                        self.theta4: theta4_value_list[0],
-                        self.theta5: theta5_value_list[0],
-                        self.theta6: theta6_value_list[0],
-                        self.theta7: theta7_value_list[0],
-                    }
-                )
-
-                det = max(J_Numerical) / min(J_Numerical)
-            
             J_inverse = J_Numerical.pinv()
 
             # Calculate the new end effector position
             positions_val = self.Tn[5].subs(
                 {
-                    self.theta1: theta1_value_list[i],
-                    self.theta2: theta2_value_list[i],
-                    self.theta3: theta3_value_list[i],
-                    self.theta4: theta4_value_list[i],
-                    self.theta5: theta5_value_list[i],
-                    self.theta6: theta6_value_list[i],
-                    self.theta7: theta7_value_list[i],
+                    self.theta1: self.theta1_value_list[i],
+                    self.theta2: self.theta2_value_list[i],
+                    self.theta3: self.theta3_value_list[i],
+                    self.theta4: self.theta4_value_list[i],
+                    self.theta5: self.theta5_value_list[i],
+                    self.theta6: self.theta6_value_list[i],
+                    self.theta7: self.theta7_value_list[i],
                 }
             )
             x_value_list.append(positions_val[0, 3])
@@ -400,30 +357,24 @@ class BoxingNode(Node):
             joint_velocities_val = J_inverse @ end_effector_velocities.subs(
                 {x_dot_symbol: x_dot[i], y_dot_symbol: y_dot[i], z_dot_symbol: z_dot[i]}
             )
-
-            # Limit the joint velocities
-            for j in range(7):
-                if abs(joint_velocities_val[j]) > self.maximum_joint_velocity:
-                    print("q_dot ", j, " large: ", joint_velocities_val[j])
-                    joint_velocities_val[j] *= self.scale
             
             # Save joint velocitie
-            self.theta_dot1_value_list.append(float(joint_velocities_val[0]))
-            self.theta_dot2_value_list.append(float(joint_velocities_val[1]))
-            self.theta_dot3_value_list.append(float(joint_velocities_val[2]))
-            self.theta_dot4_value_list.append(float(joint_velocities_val[3]))
-            self.theta_dot5_value_list.append(float(joint_velocities_val[4]))
-            self.theta_dot6_value_list.append(float(joint_velocities_val[5]))
-            self.theta_dot7_value_list.append(float(joint_velocities_val[6]))
+            self.theta_dot1_value_list.append(joint_velocities_val[0])
+            self.theta_dot2_value_list.append(joint_velocities_val[1])
+            self.theta_dot3_value_list.append(joint_velocities_val[2])
+            self.theta_dot4_value_list.append(joint_velocities_val[3])
+            self.theta_dot5_value_list.append(joint_velocities_val[4])
+            self.theta_dot6_value_list.append(joint_velocities_val[5])
+            self.theta_dot7_value_list.append(joint_velocities_val[6])
 
             # Calculate the new joint angles after 1 time step
-            theta1_value_list.append(theta1_value_list[i] + self.theta_dot1_value_list[i] * self.dt)
-            theta2_value_list.append(theta2_value_list[i] + self.theta_dot2_value_list[i] * self.dt)
-            theta3_value_list.append(theta3_value_list[i] + self.theta_dot3_value_list[i] * self.dt)
-            theta4_value_list.append(theta4_value_list[i] + self.theta_dot4_value_list[i] * self.dt)
-            theta5_value_list.append(theta5_value_list[i] + self.theta_dot5_value_list[i] * self.dt)
-            theta6_value_list.append(theta6_value_list[i] + self.theta_dot6_value_list[i] * self.dt)
-            theta7_value_list.append(theta7_value_list[i] + self.theta_dot7_value_list[i] * self.dt)
+            self.theta1_value_list.append(self.theta1_value_list[i] + self.theta_dot1_value_list[i] * self.dt)
+            self.theta2_value_list.append(self.theta2_value_list[i] + self.theta_dot2_value_list[i] * self.dt)
+            self.theta3_value_list.append(self.theta3_value_list[i] + self.theta_dot3_value_list[i] * self.dt)
+            self.theta4_value_list.append(self.theta4_value_list[i] + self.theta_dot4_value_list[i] * self.dt)
+            self.theta5_value_list.append(self.theta5_value_list[i] + self.theta_dot5_value_list[i] * self.dt)
+            self.theta6_value_list.append(self.theta6_value_list[i] + self.theta_dot6_value_list[i] * self.dt)
+            self.theta7_value_list.append(self.theta7_value_list[i] + self.theta_dot7_value_list[i] * self.dt)
 
         # Plot joint velocities
         plt.figure("Joint Velocities")
@@ -441,13 +392,13 @@ class BoxingNode(Node):
 
         # Plot joint angles
         plt.figure("Joint Angles")
-        plt.plot(time, theta1_value_list[0:len(time)], label="theta1")
-        plt.plot(time, theta2_value_list[0:len(time)], label="theta2")
-        plt.plot(time, theta3_value_list[0:len(time)], label="theta3")
-        plt.plot(time, theta4_value_list[0:len(time)], label="theta4")
-        plt.plot(time, theta5_value_list[0:len(time)], label="theta5")
-        plt.plot(time, theta6_value_list[0:len(time)], label="theta6")
-        plt.plot(time, theta7_value_list[0:len(time)], label="theta7")
+        plt.plot(time, self.theta1_value_list[0:len(time)], label="theta1")
+        plt.plot(time, self.theta2_value_list[0:len(time)], label="theta2")
+        plt.plot(time, self.theta3_value_list[0:len(time)], label="theta3")
+        plt.plot(time, self.theta4_value_list[0:len(time)], label="theta4")
+        plt.plot(time, self.theta5_value_list[0:len(time)], label="theta5")
+        plt.plot(time, self.theta6_value_list[0:len(time)], label="theta6")
+        plt.plot(time, self.theta7_value_list[0:len(time)], label="theta7")
         plt.xlabel("Time (s)")
         plt.ylabel("Joint Angles (rad)")
         plt.title("Joint Angles over Time")
@@ -476,13 +427,13 @@ class BoxingNode(Node):
             time_current = self.get_clock().now()
             if (time_current - time_previous) >= rclpy.duration.Duration(seconds=1.0) :
                 approaching = False
-            joint_velocities.data = [0.0,
-                                     0.0,
-                                     -pi/2,
-                                     -pi/2,
-                                     0.0,
-                                     0.0,
-                                     0.0]
+            joint_velocities.data = [float(self.theta1_value_list[0]),
+                                     float(self.theta2_value_list[0]),
+                                     float(self.theta3_value_list[0]),
+                                     float(self.theta4_value_list[0]),
+                                     float(self.theta5_value_list[0]),
+                                     float(self.theta6_value_list[0]),
+                                     float(self.theta7_value_list[0])]
 
             self.joint_velocities_pub.publish(joint_velocities)
 
@@ -492,13 +443,13 @@ class BoxingNode(Node):
             time_current = self.get_clock().now()
             if ((time_current - time_previous) >= rclpy.duration.Duration(seconds=self.dt)):
                 time_previous = time_current
-                joint_velocities.data = [self.theta_dot1_value_list[i],
-                                         self.theta_dot2_value_list[i],
-                                         self.theta_dot3_value_list[i],
-                                         self.theta_dot4_value_list[i],
-                                         self.theta_dot5_value_list[i],
-                                         self.theta_dot6_value_list[i],
-                                         self.theta_dot7_value_list[i]]
+                joint_velocities.data = [float(self.theta_dot1_value_list[i]),
+                                         float(self.theta_dot2_value_list[i]),
+                                         float(self.theta_dot3_value_list[i]),
+                                         float(self.theta_dot4_value_list[i]),
+                                         float(self.theta_dot5_value_list[i]),
+                                         float(self.theta_dot6_value_list[i]),
+                                         float(self.theta_dot7_value_list[i])]
                 i += 1
                 self.joint_velocities_pub.publish(joint_velocities)
      
