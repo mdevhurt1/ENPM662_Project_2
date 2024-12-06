@@ -1,586 +1,508 @@
 #!/usr/bin/env python3
-import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import Twist
-from std_msgs.msg import Float64MultiArray
-import sympy as sym
-import numpy as np
-import matplotlib.pyplot as plt
-from numpy import pi
+
 import sys
 import select
 import tty
 import termios
-from pynput import keyboard
+
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Float64MultiArray
+
+import sympy as sym
+import numpy as np
+import matplotlib.pyplot as plt
+from numpy import pi
+
 from roboticstoolbox import DHRobot, RevoluteDH
 
-class BoxingNode(Node):
+##########################################
+# Helper functions for plotting and geometry
+##########################################
+def set_axes_equal(ax):
+    """
+    Adjust the 3D plot axes so that they have equal scale, ensuring
+    that objects (like trajectories) appear proportionally correct.
+    """
+    x_limits = ax.get_xlim3d()
+    y_limits = ax.get_ylim3d()
+    z_limits = ax.get_zlim3d()
 
+    x_range = abs(x_limits[1] - x_limits[0])
+    y_range = abs(y_limits[1] - y_limits[0])
+    z_range = abs(z_limits[1] - z_limits[0])
+
+    max_range = max(x_range, y_range, z_range)
+    x_middle = np.mean(x_limits)
+    y_middle = np.mean(y_limits)
+    z_middle = np.mean(z_limits)
+
+    ax.set_xlim3d([x_middle - max_range / 2, x_middle + max_range / 2])
+    ax.set_ylim3d([y_middle - max_range / 2, y_middle + max_range / 2])
+    ax.set_zlim3d([z_middle - max_range / 2, z_middle + max_range / 2])
+
+def plot_joint_velocities(time, joint_velocity_lists):
+    """
+    Plot all seven joint velocities over time.
+    """
+    plt.figure("Joint Velocities")
+    for j in range(7):
+        plt.plot(time, joint_velocity_lists[j], label=f"theta_dot{j+1}")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Joint Velocities (rad/s)")
+    plt.title("Joint Velocities over Time")
+    plt.legend()
+
+def plot_joint_angles(time, joint_angle_lists):
+    """
+    Plot all seven joint angles over time.
+    """
+    plt.figure("Joint Angles")
+    for j in range(7):
+        length = min(len(time), len(joint_angle_lists[j]))
+        plt.plot(time[:length], joint_angle_lists[j][:length], label=f"theta{j+1}")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Joint Angles (rad)")
+    plt.title("Joint Angles over Time")
+    plt.legend()
+
+def plot_end_effector_positions(x_values, y_values, z_values, label="End Effector Path"):
+    """
+    Plot the 3D trajectory of the end-effector.
+    """
+    fig = plt.figure("End Effector Positions")
+    ax = fig.add_subplot(111, projection="3d")
+    ax.plot3D(x_values, y_values, z_values, color="blue", label=label)
+    ax.set_xlabel("X (mm)")
+    ax.set_ylabel("Y (mm)")
+    ax.set_zlabel("Z (mm)")
+    ax.legend()
+    return ax
+
+
+##########################################
+# Boxing Node
+##########################################
+class BoxingNode(Node):
     def __init__(self):
         super().__init__('boxing_node')
 
-        # Publish to the position and velocity controller topics
+        # Publisher for joint velocities
         self.joint_velocities_pub = self.create_publisher(Float64MultiArray, '/velocity_controller/commands', 10)
 
+        # Store original terminal settings to restore after reading keyboard input
         self.settings = termios.tcgetattr(sys.stdin)
-        
-        # path parameters
+
+        # Robot and simulation parameters
         self.update_rate = 10
-        self.dt = 1/self.update_rate
-
-        ###############
-        # world x -> robot y
-        # world y -> robot z
-        # world z -> robot x
-        ###############
-        self.maximum_joint_velocity = 2*pi
-        self.scale = 0.01
-        self.offset = (1/180) * pi
+        self.dt = 1 / self.update_rate
+        self.maximum_joint_velocity = 2 * pi   # Max allowed joint velocity
+        self.scale = 0.01                      # Scale factor for velocities if exceeded
+        self.offset = (1/180)*pi               # Small offset for resolving singularities
         self.time_per_punch_in_seconds = 3
-        self.radius = 150
+        self.radius = 150                      # Radius used in punch trajectory calculations
 
-        self.theta_dot1_value_list = []
-        self.theta_dot2_value_list = []
-        self.theta_dot3_value_list = []
-        self.theta_dot4_value_list = []
-        self.theta_dot5_value_list = []
-        self.theta_dot6_value_list = []
-        self.theta_dot7_value_list = []
+        # Define symbolic variables for joint angles
+        self.theta_symbols = sym.symbols('theta1 theta2 theta3 theta4 theta5 theta6 theta7', real=True)
+        (self.theta1, self.theta2, self.theta3, 
+         self.theta4, self.theta5, self.theta6, 
+         self.theta7) = self.theta_symbols
 
-        self.theta1_value_list = [0]
-        self.theta2_value_list = [0.0]
-        self.theta3_value_list = [0]
-        self.theta4_value_list = [-pi/2]
-        self.theta5_value_list = [0.0]
-        self.theta6_value_list = [pi/2]
-        self.theta7_value_list = [0.0]
+        # Denavit-Hartenberg parameters for the robot
+        self.DH = sym.Matrix([
+            [self.theta1, 165.1,   0,    pi/2],
+            [self.theta2, 0,       0,   -pi/2],
+            [self.theta3, 255.03,  0,    pi/2],
+            [self.theta4, 0,       0,   -pi/2],
+            [self.theta5, 427.46,  0,    pi/2],
+            [self.theta6, 0,       0,   -pi/2],
+            [self.theta7, 0,      -85,   0]
+        ])
 
-        # DH table for the UR3e documented in the homework
-        self.theta1, self.theta2, self.theta3, self.theta4, self.theta5, self.theta6, self.theta7 = sym.symbols('theta1:8')
-        #                      theta,         d,          a,      alpha
-        self.DH = sym.Matrix([[self.theta1,   0.1651,     0,      pi/2    ],
-                              [self.theta2,   0,          0,      -pi/2   ],
-                              [self.theta3,   0.25503,    0,      pi/2    ],
-                              [self.theta4,   0,          0,      -pi/2   ],
-                              [self.theta5,   0.42746,    0,      pi/2    ],
-                              [self.theta6,   0,          0,      -pi/2   ],
-                              [self.theta7,   0,          -0.085, 0       ]])
-
-        # Create successive transormation matrices for each row of the DH table
-        self.An = []
-        for i in range(7):
-            self.An.append(self.dh_transform(self.DH[i,0], self.DH[i,1]*1000, self.DH[i,2]*1000, self.DH[i,3]))
-
-        # Calculate cumulative transformations
+        # Compute forward kinematics transformation matrices for each link
+        self.An = [self.dh_transform(*self.DH[i, :]) for i in range(7)]
         self.Tn = [self.An[0]]
         for i in range(6):
             self.Tn.append(self.Tn[i] @ self.An[i+1])
 
-    # Set equal aspect ratio
-    def set_axes_equal(self, ax):
-        x_limits = ax.get_xlim3d()
-        y_limits = ax.get_ylim3d()
-        z_limits = ax.get_zlim3d()
+        # Compute the full symbolic Jacobian
+        self.J = self.compute_symbolic_jacobian()
 
-        x_range = abs(x_limits[1] - x_limits[0])
-        y_range = abs(y_limits[1] - y_limits[0])
-        z_range = abs(z_limits[1] - z_limits[0])
+        # Create a numerical evaluation function for the Jacobian
+        self.jacobian_func = sym.lambdify(self.theta_symbols, self.J, "numpy")
 
-        max_range = max(x_range, y_range, z_range)
+        # Now that Tn is defined, we can initialize or reset joint data safely
+        self.reset_joint_data()
 
-        x_middle = np.mean(x_limits)
-        y_middle = np.mean(y_limits)
-        z_middle = np.mean(z_limits)
-
-        ax.set_xlim3d([x_middle - max_range / 2, x_middle + max_range / 2])
-        ax.set_ylim3d([y_middle - max_range / 2, y_middle + max_range / 2])
-        ax.set_zlim3d([z_middle - max_range / 2, z_middle + max_range / 2])
-
-    def calculate_robot_toolbox(self):
+    def reset_joint_data(self):
         """
-        Calculate joint angles and velocities for a 7-DOF robot arm, 
-        and plot joint velocities and end effector positions over time.
+        Reset the joint angle, velocity, and end-effector position data to initial conditions.
         """
-        # Define the robot using DH parameters
-        robot = DHRobot([
-            RevoluteDH(a=0, alpha=np.pi/2, d=165.1),
-            RevoluteDH(a=0, alpha=-np.pi/2, d=0),
-            RevoluteDH(a=0, alpha=np.pi/2, d=255.03),
-            RevoluteDH(a=0, alpha=-np.pi/2, d=0),
-            RevoluteDH(a=0, alpha=np.pi/2, d=427.46),
-            RevoluteDH(a=0, alpha=-np.pi/2, d=0),
-            RevoluteDH(a=-85, alpha=0, d=0),
-        ], name="7-DOF_Robot")
+        # Initial joint angles
+        self.joint_angle_lists = [
+            [0],                # theta1
+            [0],                # theta2
+            [0],                # theta3
+            [-(120/180)*pi],    # theta4
+            [0],                # theta5
+            [pi/2],             # theta6
+            [0.0]               # theta7
+        ]
 
-        # Visualize the robot with initial joint angles
-        initial_angles = [self.theta1_value_list[0], self.theta2_value_list[0],
-                        self.theta3_value_list[0], self.theta4_value_list[0],
-                        self.theta5_value_list[0], self.theta6_value_list[0],
-                        self.theta7_value_list[0]]
-        robot.plot(initial_angles, block=True)
+        # Start joint velocities at zero
+        self.joint_velocity_lists = [[0.0] for _ in range(7)]
 
-        # Get Cartesian path parameters
-        time, x_dot, y_dot, z_dot = self.cartesian_path()
+        # Compute the initial end-effector position based on initial angles
+        initial_thetas = [lst[0] for lst in self.joint_angle_lists]
+        positions_val = self.Tn[6].subs({
+            self.theta1: initial_thetas[0],
+            self.theta2: initial_thetas[1],
+            self.theta3: initial_thetas[2],
+            self.theta4: initial_thetas[3],
+            self.theta5: initial_thetas[4],
+            self.theta6: initial_thetas[5],
+            self.theta7: initial_thetas[6]
+        })
+        # Store end-effector trajectory
+        self.x_vals = [float(positions_val[0,3])]
+        self.y_vals = [float(positions_val[1,3])]
+        self.z_vals = [float(positions_val[2,3])]
 
-        # Initialize position lists
-        x_value_list, y_value_list, z_value_list = [], [], []
-        print("Calculating...")
+    def publish_joint_velocities(self, velocities):
+        """
+        Publish a set of joint velocities to the robot velocity controller.
+        """
+        msg = Float64MultiArray()
+        msg.data = velocities
+        self.joint_velocities_pub.publish(msg)
 
-        for i, t in enumerate(time):
-            # Current joint angles
-            thetas = np.array([self.theta1_value_list[i], self.theta2_value_list[i],
-                            self.theta3_value_list[i], self.theta4_value_list[i],
-                            self.theta5_value_list[i], self.theta6_value_list[i],
-                            self.theta7_value_list[i]])
+    def get_current_thetas_from_last(self):
+        """
+        Retrieve the latest joint angles from the recorded lists.
+        """
+        return np.array([joint_list[-1] for joint_list in self.joint_angle_lists])
 
-            # Compute Jacobian
-            J = robot.jacob0(thetas)
-            effector = np.array([x_dot[i], y_dot[i], z_dot[i], 0, 0, 0])
-            
-            # Ensure J and effector are numeric
-            J_numeric = np.array(J, dtype=np.float64)
-            effector_numeric = np.array(effector, dtype=np.float64)
-
-            # Perform the pseudo-inverse operation
-            try:
-                theta_dots = np.linalg.pinv(J_numeric).dot(effector_numeric)
-            except np.linalg.LinAlgError as e:
-                print(f"Pseudo-inverse failed at time {t} with error: {e}")
-                return
-            except TypeError as e:
-                print(f"Type conversion failed for Jacobian or effector at time {t} with error: {e}")
-                return
-
-            # Update joint angles and store velocities
-            for j in range(7):
-                theta_next = thetas[j] + theta_dots[j] * self.dt
-                getattr(self, f"theta{j+1}_value_list").append(theta_next)
-                getattr(self, f"theta_dot{j+1}_value_list").append(theta_dots[j])
-
-            # Compute forward kinematics
-            T = robot.fkine(thetas + theta_dots * self.dt)
-            translation = T.t
-            x_value_list.append(translation[0])
-            y_value_list.append(translation[1])
-            z_value_list.append(translation[2])
-
-        # Plot joint velocities
-        plt.figure("Joint Velocities")
-        for j in range(7):
-            plt.plot(time, getattr(self, f"theta_dot{j+1}_value_list"), label=f"theta_dot{j+1}")
-        plt.xlabel("Time (s)")
-        plt.ylabel("Joint Velocities (rad/s)")
-        plt.title("Joint Velocities over Time")
-        plt.legend()
-
-        # Plot end effector positions
-        fig = plt.figure("End Effector Positions")
-        ax = fig.add_subplot(111, projection="3d")
-        ax.plot3D(x_value_list, y_value_list, z_value_list, color="blue", label="End Effector Path")
-        ax.set_xlabel("X (mm)")
-        ax.set_ylabel("Y (mm)")
-        ax.set_zlabel("Z (mm)")
-        self.set_axes_equal(ax)
-        ax.legend()
-        plt.show()
-
-    # Get the key press from the terminal
     def getKey(self):
+        """
+        Capture a single character from stdin without blocking for too long.
+        """
         tty.setraw(sys.stdin.fileno())
         rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
-        if rlist:
-            key = sys.stdin.read(1)
-        else:
-            key = ''
-
+        key = sys.stdin.read(1) if rlist else ''
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.settings)
         return key
 
-    # Create generalized transformation matrix for DH table
     def dh_transform(self, theta, d, a, alpha):
+        """
+        Compute a single Denavit-Hartenberg transformation matrix for given parameters.
+        """
         return sym.Matrix([
-            [sym.cos(theta), -sym.sin(theta)*sym.cos(alpha), sym.sin(theta)*sym.sin(alpha), a*sym.cos(theta)],
-            [sym.sin(theta), sym.cos(theta)*sym.cos(alpha), -sym.cos(theta)*sym.sin(alpha), a*sym.sin(theta)],
-            [0, sym.sin(alpha), sym.cos(alpha), d],
-            [0, 0, 0, 1]
+            [sym.cos(theta), -sym.sin(theta)*sym.cos(alpha),  sym.sin(theta)*sym.sin(alpha), a*sym.cos(theta)],
+            [sym.sin(theta),  sym.cos(theta)*sym.cos(alpha), -sym.cos(theta)*sym.sin(alpha), a*sym.sin(theta)],
+            [0,               sym.sin(alpha),                 sym.cos(alpha),                d],
+            [0,               0,                              0,                             1]
         ])
 
-    def strike(self, x, y, z, punch_number):
-        t = sym.Symbol("t")
-        time = []
-        x_dot = []
-        y_dot = []
-        z_dot = []
-
-        t1 = np.linspace(0, self.time_per_punch_in_seconds, self.time_per_punch_in_seconds * self.update_rate)
-
-        # Calculate cartesian velocities
-        x1_dot = x.diff(t)
-        y1_dot = y.diff(t)
-        z1_dot = z.diff(t)
-
-        # Append to path
-        for i in range(len(t1)):
-            time.append(t1[i] + self.time_per_punch_in_seconds*punch_number)
-            x_dot.append(x1_dot.subs({t: t1[i]}))
-            y_dot.append(y1_dot.subs({t: t1[i]}))
-            z_dot.append(z1_dot.subs({t: t1[i]}))
-
-        return time, x_dot, y_dot, z_dot
-
-    # Takes the (x, y, z) of S and returns the cartesian path parameters
-    def cartesian_path(self):
-        t = sym.Symbol("t")
-        time = []
-        x_dot = []
-        y_dot = []
-        z_dot = []
-        temp_time = []
-        temp_x_dot = []
-        temp_y_dot = []
-        temp_z_dot = []
-
-        # # Upper Cut
-        # x = -(self.radius * sym.sin((2 * pi / (self.time_per_punch_in_seconds)) * t))
-        # y = (self.radius/10 * sym.cos((2 * pi / (self.time_per_punch_in_seconds)) * t))
-        # z = -(self.radius * sym.cos((2 * pi / (self.time_per_punch_in_seconds)) * t))
-
-        # temp_time, temp_x_dot, temp_y_dot, temp_z_dot = self.strike(x, y, z, 0)
-        # for i in range(len(temp_time)):
-        #     time.append(temp_time[i])
-        #     x_dot.append(temp_x_dot[i])
-        #     y_dot.append(temp_y_dot[i])
-        #     z_dot.append(temp_z_dot[i])
-
-        # # Hook
-        # x = (self.radius * sym.sin((2 * pi / (self.time_per_punch_in_seconds)) * t))
-        # y = (self.radius/4 * sym.cos((2 * pi / (self.time_per_punch_in_seconds)) * t))
-        # z = -(self.radius/10 * sym.cos((2 * pi / (self.time_per_punch_in_seconds)) * t))
-
-        # temp_time, temp_x_dot, temp_y_dot, temp_z_dot = self.strike(x, y, z, 1)
-        # for i in range(len(temp_time)):
-        #     time.append(temp_time[i])
-        #     x_dot.append(temp_x_dot[i])
-        #     y_dot.append(temp_y_dot[i])
-        #     z_dot.append(temp_z_dot[i])
-        
-        # # Jab
-        # x = -(self.radius * sym.cos((2 * pi / (self.time_per_punch_in_seconds)) * t))
-        # y = 0*t
-        # z = (self.radius/2 * sym.cos((2 * pi / (self.time_per_punch_in_seconds)) * t))
-
-        # temp_time, temp_x_dot, temp_y_dot, temp_z_dot = self.strike(x, y, z, 2)
-        # for i in range(len(temp_time)):
-        #     time.append(temp_time[i])
-        #     x_dot.append(temp_x_dot[i])
-        #     y_dot.append(temp_y_dot[i])
-        #     z_dot.append(temp_z_dot[i])
-        
-        # omega = 2*pi / self.time_per_punch_in_seconds
-
-        # # Jab
-        # x = -(self.radius * sym.cos(omega * t))
-        # y = 0*t
-        # z = 0*t
-
-        # temp_time, temp_x_dot, temp_y_dot, temp_z_dot = self.strike(x, y, z, 0)
-        # for i in range(len(temp_time)):
-        #     time.append(temp_time[i])
-        #     x_dot.append(temp_x_dot[i])
-        #     y_dot.append(temp_y_dot[i])
-        #     z_dot.append(temp_z_dot[i])
-
-        x = -(self.radius * sym.sin((2 * pi / self.time_per_punch_in_seconds) * t))
-        y = (0 * t)
-        z = (self.radius * sym.cos((2 * pi / self.time_per_punch_in_seconds) * t))
-
-        temp_time, temp_x_dot, temp_y_dot, temp_z_dot = self.strike(x, y, z, 0)
-        for i in range(len(temp_time)):
-            time.append(temp_time[i])
-            x_dot.append(temp_x_dot[i])
-            y_dot.append(temp_y_dot[i])
-            z_dot.append(temp_z_dot[i])
-
-        return time, x_dot, y_dot, z_dot
-
-    def calculate_trajectory(self):
-        # Calculate the Jacobian via the 1st method discussed in lecture
-        # Calculate Z and O components
+    def compute_symbolic_jacobian(self):
+        """
+        Compute the full symbolic Jacobian for the end-effector, combining both linear and angular parts.
+        """
         Z = [sym.Matrix([0, 0, 1])]
         O = [sym.Matrix([0, 0, 0])]
         for T in self.Tn:
             Z.append(sym.Matrix(T[:3, 2]))
             O.append(sym.Matrix(T[:3, 3]))
-        
-        # Calculate Jv and Jw
+
         Jv = sym.zeros(3, 7)
         Jw = sym.zeros(3, 7)
-        for i in range(6):
-            Jv[:,i] = Z[i].cross(O[7] - O[i])
-            Jw[:,i] = Z[i]
 
-        self.J = sym.Matrix.vstack(Jv, Jw)
+        # Each column of Jv and Jw is derived from the position and orientation of each joint
+        for i in range(7):
+            Jv[:, i] = Z[i].cross(O[7] - O[i])  # Linear velocity part
+            Jw[:, i] = Z[i]                     # Angular velocity part
 
-        # Initialize positions, joint angles and velocities lists
-        x_value_list = []
-        y_value_list = []
-        z_value_list = []
+        return sym.Matrix.vstack(Jv, Jw)
 
-        # Calculate cartesian path parameters
-        time, x_dot, y_dot, z_dot = self.cartesian_path()
+    def substitute_jacobian(self, current_thetas):
+        """
+        Evaluate the numeric Jacobian at the given joint angles.
+        """
+        return self.jacobian_func(*current_thetas)
 
-        # Calculate the forward velocity kinematics
-        theta_dot1, theta_dot2, theta_dot3, theta_dot4, theta_dot5, theta_dot6, theta_dot7  = sym.symbols("theta_dot1:8")
+    def get_pattern_trajectory(self, pattern_index):
+        """
+        Given a pattern index, return the desired Cartesian velocity profiles (x_dot, y_dot, z_dot) over time.
+        Patterns are defined symbolically using sinusoidal functions.
+        """
+        t = sym.Symbol("t")
+        # Define multiple punching trajectories
+        patterns = [
+            # 0: Upper Cut
+            (-(self.radius*sym.sin((2*pi/self.time_per_punch_in_seconds)*t)),
+             (self.radius/10 * sym.cos((2*pi/self.time_per_punch_in_seconds)*t)),
+             -(self.radius*sym.cos((2*pi/self.time_per_punch_in_seconds)*t))),
 
-        # Calculate end effector velocities
-        forward_velocity_kinematics = self.J @ sym.Matrix(
-            [[theta_dot1], [theta_dot2], [theta_dot3], [theta_dot4], [theta_dot5], [theta_dot6], [theta_dot7]]
-        )
+            # 1: Hook
+            ((self.radius*sym.sin((2*pi/self.time_per_punch_in_seconds)*t)),
+             (self.radius/4 * sym.cos((2*pi/self.time_per_punch_in_seconds)*t)),
+             -(self.radius/10 * sym.cos((2*pi/self.time_per_punch_in_seconds)*t))),
 
-        # Calculate end effector velocities
-        x_dot_symbol = sym.Symbol("x_dot_symbol")
-        y_dot_symbol = sym.Symbol("y_dot_symbol")
-        z_dot_symbol = sym.Symbol("z_dot_symbol")
-        end_effector_velocities = sym.Matrix(
-            [[x_dot_symbol], [y_dot_symbol], [z_dot_symbol], [0], [0], [0]]
-        )
+            # 2: Jab
+            (-(self.radius*sym.cos((2*pi/self.time_per_punch_in_seconds)*t)),
+             0*t,
+             (self.radius/2 * sym.cos((2*pi/self.time_per_punch_in_seconds)*t))),
 
-        print("Starting calculation")
-        # Loop through toolpath to get inverse velocity kinematics
-        for i in range(len(time)):
-            if i % self.update_rate == 0:
-                print(i, " out of ", len(time), " timestamps calculated")
+            # 3: Simple Jab
+            (-(self.radius*sym.cos((2*pi/self.time_per_punch_in_seconds)*t)),
+             0*t,
+             0*t),
 
-            # Calculate numerical Jacobian
-            J_Numerical = self.J.subs(
-                {
-                    self.theta1: self.theta1_value_list[i],
-                    self.theta2: self.theta2_value_list[i],
-                    self.theta3: self.theta3_value_list[i],
-                    self.theta4: self.theta4_value_list[i],
-                    self.theta5: self.theta5_value_list[i],
-                    self.theta6: self.theta6_value_list[i],
-                    self.theta7: self.theta7_value_list[i],
-                }
-            )
+            # 4: Another pattern
+            (-(self.radius*sym.sin((2*pi/self.time_per_punch_in_seconds)*t)),
+             0*t,
+             (self.radius*sym.cos((2*pi/self.time_per_punch_in_seconds)*t))),
 
-            # Check if the determinant is close to 0, if so we need to offset to escape singularity
-            det = max(J_Numerical) / min(J_Numerical)
-            k = 0
-            while abs(det) <= 0.05:
-                print("Close to singularity")
-                # try moving each joint by a small offset until we escape the singularity
-                if k == 0:
-                    theta1_value_list[0] += self.offset
-                elif k == 1:
-                    theta2_value_list[0] += self.offset
-                elif k == 2:
-                    theta3_value_list[0] += self.offset
-                elif k == 3:
-                    theta4_value_list[0] += self.offset
-                elif k == 4:
-                    theta5_value_list[0] += self.offset
-                elif k == 5:
-                    theta6_value_list[0] += self.offset
-                elif k == 6:
-                    k = -1 # if we are still in a singularity after moving each joint, restart
-                k += 1
+            # 5-9: Future patterns (currently placeholders)
+            (0*t,0*t,0*t),
+            (0*t,0*t,0*t),
+            (0*t,0*t,0*t),
+            (0*t,0*t,0*t),
+            (0*t,0*t,0*t),
+        ]
 
-                # Calculate numerical Jacobian
-                J_Numerical = J.subs(
-                    {
-                        theta1: theta1_value_list[i],
-                        theta2: theta2_value_list[i],
-                        theta3: theta3_value_list[i],
-                        theta4: theta4_value_list[i],
-                        theta5: theta5_value_list[i],
-                        theta6: theta6_value_list[i],
-                    }
-                )
+        x_expr, y_expr, z_expr = patterns[pattern_index]
 
-                det = max(J_Numerical) / min(J_Numerical)
+        # Discretize time for the given pattern
+        punch_timestamps = np.linspace(0, self.time_per_punch_in_seconds, self.time_per_punch_in_seconds * self.update_rate)
 
-            # J_inverse = np.linalg.pinv(J_Numerical)
-            J_inverse = J_Numerical.pinv()
+        # Compute derivatives wrt time to get x_dot, y_dot, z_dot
+        x_dot_expr = sym.diff(x_expr, t)
+        y_dot_expr = sym.diff(y_expr, t)
+        z_dot_expr = sym.diff(z_expr, t)
 
-            # Calculate the new end effector position
-            positions_val = self.Tn[6].subs(
-                {
-                    self.theta1: self.theta1_value_list[i],
-                    self.theta2: self.theta2_value_list[i],
-                    self.theta3: self.theta3_value_list[i],
-                    self.theta4: self.theta4_value_list[i],
-                    self.theta5: self.theta5_value_list[i],
-                    self.theta6: self.theta6_value_list[i],
-                    self.theta7: self.theta7_value_list[i],
-                }
-            )
-            x_value_list.append(positions_val[0, 3])
-            y_value_list.append(positions_val[1, 3])
-            z_value_list.append(positions_val[2, 3])
+        x_dot_vals = [x_dot_expr.subs({t: ti}) for ti in punch_timestamps]
+        y_dot_vals = [y_dot_expr.subs({t: ti}) for ti in punch_timestamps]
+        z_dot_vals = [z_dot_expr.subs({t: ti}) for ti in punch_timestamps]
 
-            # Calculate the new joint velocities
-            joint_velocities_val = J_inverse @ end_effector_velocities.subs(
-                {x_dot_symbol: x_dot[i], y_dot_symbol: y_dot[i], z_dot_symbol: z_dot[i]}
-            )
+        return punch_timestamps, x_dot_vals, y_dot_vals, z_dot_vals
 
+    def scale_if_exceeded(self, joint_vels):
+        """
+        Scale the joint velocities if any exceed the maximum allowed velocity.
+        """
+        if any(abs(jv) > self.maximum_joint_velocity for jv in joint_vels):
+            return self.scale
+        return 1.0
 
-            # Limit the joint velocities
-            for j in range(6):
-                if abs(joint_velocities_val[j]) > self.maximum_joint_velocity:
-                    print("q_dot ", j, " large: ", joint_velocities_val[j])
-                    joint_velocities_val[j] *= self.scale
-            
-            # Save joint velocitie
-            self.theta_dot1_value_list.append(joint_velocities_val[0])
-            self.theta_dot2_value_list.append(joint_velocities_val[1])
-            self.theta_dot3_value_list.append(joint_velocities_val[2])
-            self.theta_dot4_value_list.append(joint_velocities_val[3])
-            self.theta_dot5_value_list.append(joint_velocities_val[4])
-            self.theta_dot6_value_list.append(joint_velocities_val[5])
-            self.theta_dot7_value_list.append(joint_velocities_val[6])
+    def resolve_singularity(self, J_numeric, current_thetas):
+        """
+        Attempt to resolve singularities by slightly adjusting some joint angles.
+        If the Jacobian condition measure is too low, increment angles by a small offset.
+        """
+        try:
+            condition_measure = np.max(J_numeric) / np.min(J_numeric)
+        except ZeroDivisionError:
+            condition_measure = 0
 
-            # Calculate the new joint angles after 1 time step
-            self.theta1_value_list.append(self.theta1_value_list[i] + (self.theta_dot1_value_list[i] * self.dt))
-            self.theta2_value_list.append(self.theta2_value_list[i] + (self.theta_dot2_value_list[i] * self.dt))
-            self.theta3_value_list.append(self.theta3_value_list[i] + (self.theta_dot3_value_list[i] * self.dt))
-            self.theta4_value_list.append(self.theta4_value_list[i] + (self.theta_dot4_value_list[i] * self.dt))
-            self.theta5_value_list.append(self.theta5_value_list[i] + (self.theta_dot5_value_list[i] * self.dt))
-            self.theta6_value_list.append(self.theta6_value_list[i] + (self.theta_dot6_value_list[i] * self.dt))
-            self.theta7_value_list.append(self.theta7_value_list[i] + (self.theta_dot7_value_list[i] * self.dt))
+        k = 0
+        while abs(condition_measure) <= 0.05 and k < 7:
+            self.joint_angle_lists[k][-1] += self.offset
+            current_thetas = self.get_current_thetas_from_last()
+            J_numeric = self.substitute_jacobian(current_thetas)
+            try:
+                condition_measure = np.max(J_numeric) / np.min(J_numeric)
+            except ZeroDivisionError:
+                condition_measure = 0
+            k += 1
 
-        # Plot joint velocities
-        plt.figure("Joint Velocities")
-        plt.plot(time, self.theta_dot1_value_list, label="theta_dot1")
-        plt.plot(time, self.theta_dot2_value_list, label="theta_dot2")
-        plt.plot(time, self.theta_dot3_value_list, label="theta_dot3")
-        plt.plot(time, self.theta_dot4_value_list, label="theta_dot4")
-        plt.plot(time, self.theta_dot5_value_list, label="theta_dot5")
-        plt.plot(time, self.theta_dot6_value_list, label="theta_dot6")
-        plt.plot(time, self.theta_dot7_value_list, label="theta_dot7")
-        plt.xlabel("Time (s)")
-        plt.ylabel("Joint Velocities (rad/s)")
-        plt.title("Joint Velocities over Time")
-        plt.legend()
+        return J_numeric
 
-        # Plot joint angles
-        plt.figure("Joint Angles")
-        plt.plot(time, self.theta1_value_list[0:len(time)], label="theta1")
-        plt.plot(time, self.theta2_value_list[0:len(time)], label="theta2")
-        plt.plot(time, self.theta3_value_list[0:len(time)], label="theta3")
-        plt.plot(time, self.theta4_value_list[0:len(time)], label="theta4")
-        plt.plot(time, self.theta5_value_list[0:len(time)], label="theta5")
-        plt.plot(time, self.theta6_value_list[0:len(time)], label="theta6")
-        plt.plot(time, self.theta7_value_list[0:len(time)], label="theta7")
-        plt.xlabel("Time (s)")
-        plt.ylabel("Joint Angles (rad)")
-        plt.title("Joint Angles over Time")
-        plt.legend()
+    def plan_actual_pattern(self, pattern_index):
+        """
+        Plan a pattern incrementally using the actual Jacobian-based inverse kinematics approach.
+        Each step calculates joint velocities to follow the desired Cartesian trajectory.
+        """
+        self.get_logger().info(f"Planning Actual Pattern {pattern_index}...")
+        time_vals, x_dot_vals, y_dot_vals, z_dot_vals = self.get_pattern_trajectory(pattern_index)
+        
+        current_thetas = self.get_current_thetas_from_last()
+        total_steps = len(time_vals)
 
-        # Display the end effector path in xyz
-        fig1 = plt.figure("End Effector Positions")
-        ax1 = fig1.add_subplot(111, projection="3d")
-        ax1.plot3D(x_value_list, y_value_list, z_value_list, color="blue", label="Actual IK solutions")
-        ax1.set_xlabel("X (mm)")
-        ax1.set_ylabel("Y (mm)")
-        ax1.set_zlabel("Z (mm)")
-        ax1.legend()
-        self.set_axes_equal(ax1)
+        for i in range(total_steps):
+            # Compute Jacobian at current configuration
+            J_numeric = self.substitute_jacobian(current_thetas)
+            J_numeric = self.resolve_singularity(J_numeric, current_thetas)
 
-        plt.show()
+            # Desired end-effector velocities
+            effector_velocity = np.array([x_dot_vals[i], y_dot_vals[i], z_dot_vals[i], 0, 0, 0], dtype=float)
 
-        return True
+            # Compute joint velocities via the pseudoinverse of the Jacobian
+            current_joint_velocities = np.linalg.pinv(J_numeric) @ effector_velocity
 
-    def prepare_arm(self):
+            # Limit and scale if necessary
+            current_joint_velocities = np.clip(current_joint_velocities, -self.maximum_joint_velocity, self.maximum_joint_velocity)
+            current_joint_velocities *= self.scale_if_exceeded(current_joint_velocities)
+
+            # Integrate joint velocities to get new joint angles
+            new_thetas = current_thetas + current_joint_velocities * self.dt
+
+            # Record the new joint angles and velocities
+            for j in range(7):
+                self.joint_angle_lists[j].append(float(new_thetas[j]))
+                self.joint_velocity_lists[j].append(float(current_joint_velocities[j]))
+
+            # Compute and store new end-effector position
+            positions_val = self.Tn[6].subs({
+                self.theta1: new_thetas[0],
+                self.theta2: new_thetas[1],
+                self.theta3: new_thetas[2],
+                self.theta4: new_thetas[3],
+                self.theta5: new_thetas[4],
+                self.theta6: new_thetas[5],
+                self.theta7: new_thetas[6]
+            })
+            self.x_vals.append(float(positions_val[0,3]))
+            self.y_vals.append(float(positions_val[1,3]))
+            self.z_vals.append(float(positions_val[2,3]))
+
+            current_thetas = new_thetas
+
+        self.get_logger().info(f"Pattern {pattern_index} planned!")
+
+    def move_to_home(self):
+        """
+        Move the robot back to its initial "home" position by publishing
+        the initial joint angles as velocities over a short duration.
+        """
         joint_velocities = Float64MultiArray()
         time_previous = self.get_clock().now()
         time_current = time_previous
-        print(time_current-time_previous)
-        print(rclpy.duration.Duration(seconds=1.0))
-        print((time_current - time_previous) >= (rclpy.duration.Duration(seconds=1.0)))
-        while ((time_current - time_previous) <= (rclpy.duration.Duration(seconds=1.0))) :
+        while (time_current - time_previous) <= rclpy.duration.Duration(seconds=1.0):
             time_current = self.get_clock().now()
-            joint_velocities.data = [float(self.theta1_value_list[0]),
-                                     float(self.theta2_value_list[0]),
-                                     float(self.theta3_value_list[0]),
-                                     float(self.theta4_value_list[0]),
-                                     float(self.theta5_value_list[0]),
-                                     float(self.theta6_value_list[0]),
-                                     float(self.theta7_value_list[0])]
-
+            # Publish initial angles as velocities just to ensure stable home approach
+            joint_velocities.data = [float(lst[0]) for lst in self.joint_angle_lists]
             self.joint_velocities_pub.publish(joint_velocities)
+        self.get_logger().info("Finished approach to home")
 
-        print("finished approach")
-    
-    def send_joint_velocities(self):
-        joint_velocities = Float64MultiArray()
-        
+    def execute_joint_velocities(self):
+        """
+        Execute the planned joint velocities in real-time. This function
+        steps through each recorded velocity, publishing them at the defined rate.
+        """
+        if not self.joint_velocity_lists or len(self.joint_velocity_lists[0]) <= 1:
+            self.get_logger().warning("No joint velocities recorded. Please plan a trajectory first.")
+            return
+
+        num_steps = len(self.joint_velocity_lists[0])
         time_previous = self.get_clock().now()
         i = 0
-        while i < len(self.theta_dot1_value_list):
+        self.get_logger().info("Executing Joint Velocities...")
+
+        while i < num_steps:
             time_current = self.get_clock().now()
-            if ((time_current - time_previous) >= rclpy.duration.Duration(seconds=self.dt)):
+            if (time_current - time_previous) >= rclpy.duration.Duration(seconds=self.dt):
                 time_previous = time_current
-                joint_velocities.data = [float(self.theta_dot1_value_list[i]),
-                                         float(self.theta_dot2_value_list[i]),
-                                         float(self.theta_dot3_value_list[i]),
-                                         float(self.theta_dot4_value_list[i]),
-                                         float(self.theta_dot5_value_list[i]),
-                                         float(self.theta_dot6_value_list[i]),
-                                         float(self.theta_dot7_value_list[i])]
+                current_velocities = [self.joint_velocity_lists[j][i] for j in range(7)]
+                self.publish_joint_velocities(current_velocities)
                 i += 1
-                self.joint_velocities_pub.publish(joint_velocities)
-     
-    def run_control(self):
-        joint_velocities = Float64MultiArray()
-        self.msg = """
-        Lets Go Boxing!
-        ---------------------------
-        p : plan path
 
-        e : execute path
+        self.get_logger().info("Execution Complete!")
 
-        Esc to quit
+    def plot_full_trajectory(self):
         """
+        Plot the entire recorded trajectory including joint angles, velocities,
+        and end-effector positions.
+        """
+        n_steps = len(self.joint_angle_lists[0])
+        if n_steps < 2:
+            self.get_logger().warning("Not enough data to plot. Please plan a trajectory first.")
+            return
 
-        self.get_logger().info(self.msg)
+        # Create a time vector based on number of steps and dt
+        time = np.linspace(0, (n_steps - 1)*self.dt, n_steps)
 
+        # Plot all recorded data
+        plot_joint_velocities(time, self.joint_velocity_lists)
+        plot_joint_angles(time, self.joint_angle_lists)
+        ax = plot_end_effector_positions(self.x_vals, self.y_vals, self.z_vals, label="Planned Path")
+        set_axes_equal(ax)
+        plt.show()
 
+    def handle_user_input(self, key):
+        """
+        Handle user keyboard input:
+        - Number keys plan different punching patterns.
+        - 'p' plots the currently planned path.
+        - 'e' moves the robot to home.
+        - 'a' executes the planned joint velocities.
+        - 'c' clears all planned data.
+        - ESC quits.
+        """
+        if key == '\x1b':  # Escape key
+            return False
+        elif key in ['1','2','3','4','5','6','7','8','9']:
+            # Plan the pattern corresponding to the pressed number
+            pattern_index = int(key) - 1
+            self.plan_actual_pattern(pattern_index)
+        elif key == 'p':
+            self.get_logger().info('Plotting...')
+            self.plot_full_trajectory()
+            self.get_logger().info('Finished...')
+        elif key == 'e':
+            self.get_logger().info('Moving to Home...')
+            self.move_to_home()
+            self.get_logger().info('Movement Complete!')
+        elif key == 'a':
+            self.get_logger().info('Executing Joint Velocities...')
+            self.execute_joint_velocities()
+            self.get_logger().info('Execution Complete!')
+        elif key == 'c':
+            self.get_logger().info('Clearing joint angles, velocities, and stored path data...')
+            self.reset_joint_data()
+            self.get_logger().info('Data cleared. Ready for a new trajectory.')
+
+        # After any input, publish zero velocities as a default
+        self.publish_joint_velocities([0.0]*7)
+        return True
+
+    def run_control(self):
+        """
+        Main loop for user interaction. Provides instructions and waits for user input.
+        """
+        msg = """
+        Let's Go Boxing (Incremental Planning)!
+        --------------------------------------
+        1 : plan Upper Cut
+        2 : plan Hook
+        3 : plan Jab
+        4 : plan Simple Jab
+        5 : plan Another pattern
+        6-9: Future patterns
+        p : plot the planned path
+        e : move to home
+        a : execute joint velocities
+        c : clear recorded joint data and stored path
+        Esc: quit
+        """
+        self.get_logger().info(msg)
+
+        # Publish zero velocities to ensure robot stays still initially
+        self.publish_joint_velocities([0.0]*7)
+
+        # Continuously read keyboard inputs and handle them
         while True:
             key = self.getKey()
-            if key is not None:
-                if key == '\x1b':  # Escape key
-                    break
-                elif key == 'p':  # Plan
-                    self.get_logger().info('Planning Trajectory...')
-                    self.calculate_trajectory()
-                    self.get_logger().info('Trajectory Planned!')
-                elif key == 'r':  # Plan
-                    self.get_logger().info('Planning Trajectory...')
-                    self.calculate_robot_toolbox()
-                    self.get_logger().info('Trajectory Planned!')
-                elif key == 'e':  # Execute
-                    self.get_logger().info('Executing Trajectory...')
-                    self.prepare_arm()
-                    self.get_logger().info('Trajectory Executed!')
-                elif key == 'a':  # Execute again
-                    self.get_logger().info('Executing Trajectory...')
-                    self.send_joint_velocities()
-                    self.get_logger().info('Trajectory Executed!')
+            if not self.handle_user_input(key):
+                break
 
-            joint_velocities.data = [0.0, 
-                                     0.0,
-                                     0.0, 
-                                     0.0, 
-                                     0.0, 
-                                     0.0, 
-                                     0.0]
-            self.joint_velocities_pub.publish(joint_velocities)
-
+##########################################
+# Main Entry Point
+##########################################
 def main(args=None):
+    # Initialize ROS 2
     rclpy.init(args=args)
     node = BoxingNode()
-    node.run_control()
+    node.run_control()  # Start the interactive control loop
     node.destroy_node()
     rclpy.shutdown()
 
