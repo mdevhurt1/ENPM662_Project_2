@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-
-"""
-This python program allows teleop control of a robot.
-
-Use wasd to control the robot and esc to stop the program.
-This program publishes a velocity command and two identical positional commands.
-It is intended to control a robot with 1 drive axle with velocity control
-and 2 steering joints with positional control.
-
-Positive velocity corresponds to forward movement.
-Positive angle corresponds with left turning.
-
-Press q to reset the controls to 0.0
-"""
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
@@ -25,7 +11,7 @@ import termios
 from pynput import keyboard
 
 # Define key codes
-LIN_VEL_STEP_SIZE = 0.1
+ANG_VEL_STEP_SIZE = (1/180) * 3.141592654
 
 class KeyboardControlNode(Node):
 
@@ -33,7 +19,7 @@ class KeyboardControlNode(Node):
         super().__init__('keyboard_control_node')
 
         # Publish to the position and velocity controller topics
-        self.wheel_velocities_pub = self.create_publisher(Float64MultiArray, '/velocity_controller/commands', 10)
+        self.joint_velocities_pub = self.create_publisher(Float64MultiArray, '/velocity_controller/commands', 10)
         self.joint_state_pub = self.create_publisher(JointState, '/joint_states', 10)
 
         self.settings = termios.tcgetattr(sys.stdin)
@@ -52,20 +38,25 @@ class KeyboardControlNode(Node):
 
     def run_keyboard_control(self):
         self.msg = """
-        Control Your Car!
+        Control Your Arm!
         ---------------------------
-        Moving around:
-            w
-        a    s    d
+        Select Joint:
+        w
+        s
 
-        q : force stop
+        Move joint:
+        a d
+
+        Stop:
+        q
 
         Esc to quit
         """
 
         self.get_logger().info(self.msg)
-        wheel_velocities = Float64MultiArray()
-        linear_vel=0.0
+        joint_velocities = Float64MultiArray()
+        angular_vel=0.0
+        joint = 0
 
 
         while True:
@@ -74,24 +65,32 @@ class KeyboardControlNode(Node):
                 if key == '\x1b':  # Escape key
                     break
                 elif key == 'q':  # Quit
-                    linear_vel=0.0
-                    steer_angle=0.0
-                elif key == 'w':  # Forward
-                    linear_vel += LIN_VEL_STEP_SIZE
-                elif key == 's':  # Reverse
-                    linear_vel -= LIN_VEL_STEP_SIZE
+                    angular_vel=0.0
+                elif key == 'a':  # Forward
+                    angular_vel += ANG_VEL_STEP_SIZE
+                elif key == 'd':  # Reverse
+                    angular_vel -= ANG_VEL_STEP_SIZE
+                elif key == 'w':
+                    if joint < 7:
+                        joint += 1
+                elif key == 's':
+                    if joint > 0:
+                        joint -= 1
 
-                print("Linear Velocity",linear_vel)
+                print("Linear Velocity",angular_vel)
+                print("Joint", joint)
                 # Publish the control message
-                wheel_velocities.data = [0.0, 
+                joint_velocities.data = [0.0, 
                                          0.0,
                                          0.0, 
                                          0.0, 
                                          0.0, 
                                          0.0, 
-                                         linear_vel]
+                                         0.0]
 
-                self.wheel_velocities_pub.publish(wheel_velocities)
+                joint_velocities.data[joint] = angular_vel
+
+                self.joint_velocities_pub.publish(joint_velocities)
 
 def main(args=None):
     rclpy.init(args=args)

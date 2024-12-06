@@ -43,7 +43,7 @@ install(
 find_package(ros2_control REQUIRED)
 
 install(PROGRAMS
-  src/test.py
+  src/teleop.py
   src/boxing.py
   DESTINATION lib/${PROJECT_NAME}
 )

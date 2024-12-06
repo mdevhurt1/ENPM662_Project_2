@@ -104,7 +104,7 @@
     <axis
       xyz="0 0 -1" />
     <limit lower="-1.57" upper="1.57" effort="50" velocity="2.0" />
-    <dynamics damping="0.5" friction="0.1"/>
+    <!-- <dynamics damping="0.5" friction="0.1"/> -->
   </joint>
   <link
     name="ShoulderPitch">
@@ -159,7 +159,7 @@
     <axis
       xyz="0 0 -1" />
     <limit lower="-1.57" upper="1.57" effort="50" velocity="2.0" />
-    <dynamics damping="0.5" friction="0.1"/>
+    <!-- <dynamics damping="0.5" friction="0.1"/> -->
   </joint>
   <link
     name="ArmRoll">
@@ -214,7 +214,7 @@
     <axis
       xyz="0 0 -1" />
     <limit lower="-1.57" upper="1.57" effort="50" velocity="2.0" />
-    <dynamics damping="0.5" friction="0.1"/>
+    <!-- <dynamics damping="0.5" friction="0.1"/> -->
   </joint>
   <link
     name="Elbow">
@@ -269,7 +269,7 @@
     <axis
       xyz="0 0 -1" />
     <limit lower="-1.57" upper="1.57" effort="50" velocity="2.0" />
-    <dynamics damping="0.5" friction="0.1"/>
+    <!-- <dynamics damping="0.5" friction="0.1"/> -->
   </joint>
   <link
     name="WristRoll">
@@ -324,7 +324,7 @@
     <axis
       xyz="0 0 1" />
     <limit lower="-1.57" upper="1.57" effort="50" velocity="2.0" />
-    <dynamics damping="0.5" friction="0.1"/>
+    <!-- <dynamics damping="0.5" friction="0.1"/> -->
   </joint>
   <link
     name="WristPitch">
@@ -379,7 +379,7 @@
     <axis
       xyz="0 0 -1" />
     <limit lower="-1.57" upper="1.57" effort="50" velocity="2.0" />
-    <dynamics damping="0.5" friction="0.1"/>
+    <!-- <dynamics damping="0.5" friction="0.1"/> -->
   </joint>
   <link
     name="WristYaw">
@@ -434,7 +434,7 @@
     <axis
       xyz="0 0 -1" />
     <limit lower="-1.57" upper="1.57" effort="50" velocity="2.0" />
-    <dynamics damping="0.5" friction="0.1"/>
+    <!-- <dynamics damping="0.5" friction="0.1"/> -->
   </joint>
 
   <ros2_control name="GazeboSystem" type="system">

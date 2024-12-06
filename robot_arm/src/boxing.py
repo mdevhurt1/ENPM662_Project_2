@@ -66,13 +66,14 @@ def plot_joint_angles(time, joint_angle_lists):
     plt.title("Joint Angles over Time")
     plt.legend()
 
-def plot_end_effector_positions(x_values, y_values, z_values, label="End Effector Path"):
+def plot_end_effector_positions(x_values, y_values, z_values, x_values_check, y_values_check, z_values_check, label="End Effector Path"):
     """
     Plot the 3D trajectory of the end-effector.
     """
     fig = plt.figure("End Effector Positions")
     ax = fig.add_subplot(111, projection="3d")
-    ax.plot3D(x_values, y_values, z_values, color="blue", label=label)
+    ax.plot3D(x_values, y_values, z_values, color="blue", label=label + " actual")
+    ax.plot3D(x_values_check, y_values_check, z_values_check, color="red", label=label + " desired")
     ax.set_xlabel("X (mm)")
     ax.set_ylabel("Y (mm)")
     ax.set_zlabel("Z (mm)")
@@ -87,6 +88,8 @@ class BoxingNode(Node):
     def __init__(self):
         super().__init__('boxing_node')
 
+        self.get_logger().info("Initializing Boxing Node")
+
         # Publisher for joint velocities
         self.joint_velocities_pub = self.create_publisher(Float64MultiArray, '/velocity_controller/commands', 10)
 
@@ -94,12 +97,12 @@ class BoxingNode(Node):
         self.settings = termios.tcgetattr(sys.stdin)
 
         # Robot and simulation parameters
-        self.update_rate = 10
+        self.update_rate = 100
         self.dt = 1 / self.update_rate
-        self.maximum_joint_velocity = 2 * pi   # Max allowed joint velocity
+        self.maximum_joint_velocity = 4 * pi   # Max allowed joint velocity
         self.scale = 0.01                      # Scale factor for velocities if exceeded
         self.offset = (1/180)*pi               # Small offset for resolving singularities
-        self.time_per_punch_in_seconds = 3
+        self.time_per_punch_in_seconds = 1
         self.radius = 150                      # Radius used in punch trajectory calculations
 
         # Define symbolic variables for joint angles
@@ -128,6 +131,8 @@ class BoxingNode(Node):
         # Compute the full symbolic Jacobian
         self.J = self.compute_symbolic_jacobian()
 
+        self.J = self.J
+
         # Create a numerical evaluation function for the Jacobian
         self.jacobian_func = sym.lambdify(self.theta_symbols, self.J, "numpy")
 
@@ -145,7 +150,7 @@ class BoxingNode(Node):
             [0],                # theta3
             [-(120/180)*pi],    # theta4
             [0],                # theta5
-            [pi/2],             # theta6
+            [pi/4],             # theta6
             [0.0]               # theta7
         ]
 
@@ -163,10 +168,14 @@ class BoxingNode(Node):
             self.theta6: initial_thetas[5],
             self.theta7: initial_thetas[6]
         })
+
         # Store end-effector trajectory
         self.x_vals = [float(positions_val[0,3])]
         self.y_vals = [float(positions_val[1,3])]
         self.z_vals = [float(positions_val[2,3])]
+        self.x_vals_check = [float(positions_val[0,3])]
+        self.y_vals_check = [float(positions_val[1,3])]
+        self.z_vals_check = [float(positions_val[2,3])]
 
     def publish_joint_velocities(self, velocities):
         """
@@ -237,32 +246,24 @@ class BoxingNode(Node):
         t = sym.Symbol("t")
         # Define multiple punching trajectories
         patterns = [
-            # 0: Upper Cut
+            # 0: Jab
+            (-(self.radius*sym.sin((2*pi/self.time_per_punch_in_seconds)*t)),
+             0*t,
+             (self.radius*sym.cos((2*pi/self.time_per_punch_in_seconds)*t))),
+            
+            # 1: Hook
+            (-(self.radius*sym.sin((2*pi/self.time_per_punch_in_seconds)*t)),
+             -(self.radius * sym.cos((2*pi/self.time_per_punch_in_seconds)*t)),
+             -(self.radius/2 * sym.cos((2*pi/self.time_per_punch_in_seconds)*t))),
+
+            # 2: Upper Cut
             (-(self.radius*sym.sin((2*pi/self.time_per_punch_in_seconds)*t)),
              (self.radius/10 * sym.cos((2*pi/self.time_per_punch_in_seconds)*t)),
              -(self.radius*sym.cos((2*pi/self.time_per_punch_in_seconds)*t))),
 
-            # 1: Hook
-            ((self.radius*sym.sin((2*pi/self.time_per_punch_in_seconds)*t)),
-             (self.radius/4 * sym.cos((2*pi/self.time_per_punch_in_seconds)*t)),
-             -(self.radius/10 * sym.cos((2*pi/self.time_per_punch_in_seconds)*t))),
-
-            # 2: Jab
-            (-(self.radius*sym.cos((2*pi/self.time_per_punch_in_seconds)*t)),
-             0*t,
-             (self.radius/2 * sym.cos((2*pi/self.time_per_punch_in_seconds)*t))),
-
-            # 3: Simple Jab
-            (-(self.radius*sym.cos((2*pi/self.time_per_punch_in_seconds)*t)),
-             0*t,
-             0*t),
-
-            # 4: Another pattern
-            (-(self.radius*sym.sin((2*pi/self.time_per_punch_in_seconds)*t)),
-             0*t,
-             (self.radius*sym.cos((2*pi/self.time_per_punch_in_seconds)*t))),
-
-            # 5-9: Future patterns (currently placeholders)
+            # 3-9: Future patterns (currently placeholders)
+            (0*t,0*t,0*t),
+            (0*t,0*t,0*t),
             (0*t,0*t,0*t),
             (0*t,0*t,0*t),
             (0*t,0*t,0*t),
@@ -322,19 +323,25 @@ class BoxingNode(Node):
         Plan a pattern incrementally using the actual Jacobian-based inverse kinematics approach.
         Each step calculates joint velocities to follow the desired Cartesian trajectory.
         """
-        self.get_logger().info(f"Planning Actual Pattern {pattern_index}...")
+        self.get_logger().info(f"Planning Pattern {pattern_index}...")
         time_vals, x_dot_vals, y_dot_vals, z_dot_vals = self.get_pattern_trajectory(pattern_index)
         
         current_thetas = self.get_current_thetas_from_last()
         total_steps = len(time_vals)
+        last_val_check_position = len(self.x_vals_check) - 1
 
         for i in range(total_steps):
+            if (i % (self.update_rate / 10)) == 0 :
+                self.get_logger().info(f"{i / self.update_rate} / {total_steps / self.update_rate} seconds planned!")
             # Compute Jacobian at current configuration
             J_numeric = self.substitute_jacobian(current_thetas)
             J_numeric = self.resolve_singularity(J_numeric, current_thetas)
 
             # Desired end-effector velocities
             effector_velocity = np.array([x_dot_vals[i], y_dot_vals[i], z_dot_vals[i], 0, 0, 0], dtype=float)
+            self.x_vals_check.append(float(self.x_vals_check[last_val_check_position+i] + x_dot_vals[i]*self.dt))
+            self.y_vals_check.append(float(self.y_vals_check[last_val_check_position+i] + y_dot_vals[i]*self.dt))
+            self.z_vals_check.append(float(self.z_vals_check[last_val_check_position+i] + z_dot_vals[i]*self.dt))
 
             # Compute joint velocities via the pseudoinverse of the Jacobian
             current_joint_velocities = np.linalg.pinv(J_numeric) @ effector_velocity
@@ -424,7 +431,7 @@ class BoxingNode(Node):
         # Plot all recorded data
         plot_joint_velocities(time, self.joint_velocity_lists)
         plot_joint_angles(time, self.joint_angle_lists)
-        ax = plot_end_effector_positions(self.x_vals, self.y_vals, self.z_vals, label="Planned Path")
+        ax = plot_end_effector_positions(self.x_vals, self.y_vals, self.z_vals, self.x_vals_check, self.y_vals_check, self.z_vals_check, label="Planned Path")
         set_axes_equal(ax)
         plt.show()
 
@@ -472,12 +479,10 @@ class BoxingNode(Node):
         msg = """
         Let's Go Boxing (Incremental Planning)!
         --------------------------------------
-        1 : plan Upper Cut
+        1 : plan Jab
         2 : plan Hook
-        3 : plan Jab
-        4 : plan Simple Jab
-        5 : plan Another pattern
-        6-9: Future patterns
+        3 : plan Upper Cut
+        4-9: Future patterns
         p : plot the planned path
         e : move to home
         a : execute joint velocities
