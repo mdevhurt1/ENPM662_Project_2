@@ -66,19 +66,22 @@ class KeyboardControlNode(Node):
                     break
                 elif key == 'q':  # Quit
                     angular_vel=0.0
+                    print("Linear Velocity",angular_vel)
                 elif key == 'a':  # Forward
                     angular_vel += ANG_VEL_STEP_SIZE
+                    print("Linear Velocity",angular_vel)
                 elif key == 'd':  # Reverse
                     angular_vel -= ANG_VEL_STEP_SIZE
+                    print("Linear Velocity",angular_vel)
                 elif key == 'w':
-                    if joint < 7:
+                    if joint < 6:
                         joint += 1
+                        print("Joint", joint)
                 elif key == 's':
                     if joint > 0:
                         joint -= 1
+                        print("Joint", joint)
 
-                print("Linear Velocity",angular_vel)
-                print("Joint", joint)
                 # Publish the control message
                 joint_velocities.data = [0.0, 
                                          0.0,
