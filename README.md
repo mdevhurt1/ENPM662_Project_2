@@ -95,3 +95,11 @@ There are two controllers available in this package.
 2. Boxing Open Loop Control
 
     `ros2 run robot_arm boxing.py`
+
+# Additional Scripts
+
+There are two additional scripts in this repository.
+
+forwad_kinematics.py - prints the transformation matrix from base frame to end effector to the terminal
+
+inverse_kinematics.py - prints the jacobian matrix to the terminal

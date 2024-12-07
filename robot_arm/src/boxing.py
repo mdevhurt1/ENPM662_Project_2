@@ -14,8 +14,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from numpy import pi
 
-from roboticstoolbox import DHRobot, RevoluteDH
-
 ##########################################
 # Helper functions for plotting and geometry
 ##########################################
@@ -130,8 +128,6 @@ class BoxingNode(Node):
 
         # Compute the full symbolic Jacobian
         self.J = self.compute_symbolic_jacobian()
-
-        self.J = self.J
 
         # Create a numerical evaluation function for the Jacobian
         self.jacobian_func = sym.lambdify(self.theta_symbols, self.J, "numpy")
