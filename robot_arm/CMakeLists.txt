@@ -30,11 +30,6 @@ install(DIRECTORY
 )
 
 install(
-  DIRECTORY include/robot_arm
-  DESTINATION include
-)
-
-install(
   PROGRAMS
   launch/robot_description_publisher.py
   DESTINATION lib/${PROJECT_NAME}
